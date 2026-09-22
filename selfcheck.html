@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Aneko动漫社 · 站点自检</title>
+<style>
+  body { margin:0; font-family: "Microsoft YaHei UI", system-ui, sans-serif; background:#0b0f16; color:#e8f4f7; }
+  header { padding:16px 20px; border-bottom:1px solid rgba(120,220,230,.25); display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  h1 { font-size:17px; margin:0; }
+  #stat { font-size:13px; color:#9fb3c4; }
+  .ok { color:#35d07f; } .err { color:#ff5d6c; }
+  main { display:grid; grid-template-columns: 420px 1fr; gap:0; height: calc(100vh - 60px); }
+  #log { overflow:auto; padding:14px 18px; font-size:13px; line-height:1.75; border-right:1px solid rgba(120,220,230,.2); }
+  #log div { border-bottom:1px dashed rgba(120,220,230,.12); padding:3px 0; }
+  #log b { color:#39e6d0; }
+  iframe { width:100%; height:100%; border:0; background:#05070d; }
+  code { background:rgba(57,230,208,.12); padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Aneko动漫社 · 自动自检</h1>
+  <span id="stat">正在启动…</span>
+  <span style="color:#6b7d90;font-size:12px">左侧是测试结果，右侧是真实运行的站点。自检结束后可以直接在这里点着玩。</span>
+</header>
+<main>
+  <div id="log"></div>
+  <iframe id="site" src="index.html" allow-downloads></iframe>
+</main>
+<script>
+var logEl = document.getElementById("log");
+var statEl = document.getElementById("stat");
+var frame = document.getElementById("site");
+var pass = 0, fail = 0, errors = [];
+function log(msg, kind) {
+  var d = document.createElement("div");
+  d.innerHTML = (kind === "ok" ? '<span class="ok">✔ </span>' : kind === "err" ? '<span class="err">✘ </span>' : kind === "head" ? "<b>" : "") + msg;
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function check(name, cond, extra) {
+  if (cond) { pass++; log(name, "ok"); }
+  else { fail++; log(name + (extra ? " — " + extra : ""), "err"); }
+}
+function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+function waitFor(fn, timeout, label) {
+  return new Promise(function (resolve) {
+    var t0 = Date.now();
+    var timer = setInterval(function () {
+      var v;
+      try { v = fn(); } catch (e) { v = null; }
+      if (v) { clearInterval(timer); resolve(v); }
+      else if (Date.now() - t0 > (timeout || 5000)) { clearInterval(timer); resolve(null); }
+    }, 60);
+  });
+}
+function nav(hash) { frame.contentWindow.location.hash = hash; return sleep(320); }
+function body() { return frame.contentDocument.body; }
+function W() { return frame.contentWindow; }
+function q(sel) { return frame.contentDocument.querySelector(sel); }
+function qa(sel) { return Array.prototype.slice.call(frame.contentDocument.querySelectorAll(sel)); }
+function click(el) { if (!el) return false; el.click(); return true; }
+function hashTo(h) { frame.contentWindow.location.hash = h; }
+
+window.onload = function () {
+  frame.onload = function () {
+    if (!W().__selfcheckBound) {
+      W().__selfcheckBound = true;
+      W().addEventListener("error", function (e) { errors.push("JS 错误：" + e.message + " @ " + (e.filename || "") + ":" + e.lineno); });
+      W().addEventListener("unhandledrejection", function (e) { errors.push("未捕获 Promise：" + (e.reason && e.reason.message ? e.reason.message : e.reason)); });
+      var ce = W().console.error;
+      W().console.error = function () { errors.push("console.error：" + Array.prototype.join.call(arguments, " ")); ce.apply(W().console, arguments); };
+      run();
+    }
+  };
+};
+
+async function run() {
+  log("=== 0. 基础加载 ===", "head");
+  check("站点脚本已执行（找到页头导航）", !!q("#mainNav"));
+  check("页脚渲染出品牌名", (q("[data-brand-name]") || {}).textContent === "Aneko动漫社");
+  check("主题变量已注入", getComputedStyle(W().document.documentElement).getPropertyValue("--miku").trim().length > 0);
+  check("首页轮播有 3 屏", qa(".hero-slide").length === 3, "实际 " + qa(".hero-slide").length);
+  check("首页出现倒计时（NEXT EVENT）", /NEXT EVENT/.test((q("#heroCountdown") || {}).textContent || ""));
+  check("首页粒子层已启动", qa("#particleLayer .particle").length > 5, "粒子数 " + qa("#particleLayer .particle").length);
+
+  log("=== 1. 各页面路由 ===", "head");
+  var routes = [
+    ["#/", ["快速入口", "最新公告", "热门作品", "社团安利墙"]],
+    ["#/about", ["关于 Aneko动漫社", "社团档案", "这个网站是怎么做的"]],
+    ["#/events", ["活动日历", "下一场活动"]],
+    ["#/gallery", ["作品展示", "上传作品"]],
+    ["#/upload", ["上传作品", "投稿须知", "我的投稿"]],
+    ["#/posts", ["公告栏", "招新"]],
+    ["#/members", ["成员与部门", "社团干部", "部门介绍"]],
+    ["#/recommend", ["安利墙", "收录条目"]],
+    ["#/join", ["加入动漫社的理由", "填写报名信息", "常见问题"]],
+    ["#/login", ["欢迎回来", "注册"]],
+  ];
+  for (var i = 0; i < routes.length; i++) {
+    await nav(routes[i][0]);
+    var txt = body().innerText || "";
+    var missing = routes[i][1].filter(function (k) { return txt.indexOf(k) < 0; });
+    check("路由 " + routes[i][0] + " 渲染正常", missing.length === 0, "缺少：" + missing.join("、"));
+  }
+
+  log("=== 2. 列表数据与筛选 ===", "head");
+  await nav("#/events");
+  var evCards = qa("[data-event-card]").length;
+  check("活动列表渲染出卡片", evCards >= 5, "卡片数 " + evCards);
+  click(q("[data-ev-state='past']"));
+  await sleep(300);
+  check("活动筛选：已结束", qa("[data-event-card]").length < evCards);
+  click(q("[data-ev-state='upcoming']"));
+  await sleep(250);
+  click(q("[data-ev-cat='工坊']"));
+  await sleep(300);
+  check("活动筛选：分类=工坊", qa("[data-event-card]").length === 1, "实际 " + qa("[data-event-card]").length);
+  await nav("#/gallery");
+  var allWorks = qa(".work-grid article").length;
+  check("作品列表渲染", allWorks >= 9, "作品数 " + allWorks);
+  click(q("[data-gal-kind='视频']"));
+  await sleep(300);
+  check("作品筛选：仅视频", qa(".work-grid article").length === 2, "实际 " + qa(".work-grid article").length);
+  click(q("[data-gal-cat='插画']"));
+  await sleep(250);
+  click(q("[data-gal-kind='全部']"));
+  await sleep(300);
+  check("作品筛选：插画", qa(".work-grid article").length >= 3, "实际 " + qa(".work-grid article").length);
+
+  log("=== 3. 详情页与视频嵌入 ===", "head");
+  click(q(".work-grid article a"));
+  await sleep(500);
+  check("作品详情页打开", /创作故事/.test(body().innerText));
+  var likeBtn = q("[data-like]");
+  var likeBefore = parseInt((likeBtn.textContent.match(/（(\d+)）/) || [0, "0"])[1], 10);
+  click(likeBtn);
+  await sleep(500);
+  var likeAfter = parseInt((q("[data-like]").textContent.match(/（(\d+)）/) || [0, "0"])[1], 10);
+  check("点赞计数 +1", likeAfter === likeBefore + 1, likeBefore + " → " + likeAfter);
+  await nav("#/gallery");
+  var videoCard = qa(".work-grid article").filter(function (a) { return /视频/.test(a.textContent); })[0];
+  if (videoCard) { click(videoCard.querySelector("a")); await sleep(500); }
+  check("视频作品详情出现播放器 iframe", !!q(".video-frame iframe"), "外链为 YouTube 演示");
+  check("YouTube 视频自动转成 embed 地址", (q(".video-frame iframe") || {}).src ? /youtube\.com\/embed\//.test(q(".video-frame iframe").src) : false);
+  await nav("#/posts");
+  click(q(".card"));
+  await sleep(400);
+  check("公告详情页打开", /返回公告栏/.test(body().innerText));
+
+  log("=== 4. 加入我们 / 活动报名 ===", "head");
+  await nav("#/join");
+  var f = q("#joinFormEl");
+  check("报名表单存在", !!f);
+  f.querySelector("[name=name]").value = "自检机器人";
+  f.querySelector("[name=sid]").value = "2026001";
+  f.querySelector("[name=contact]").value = "QQ 10001";
+  f.querySelector("[name=intro]").value = "这是自动自检写入的测试数据";
+  f.querySelector("[name=agree]").checked = true;
+  click(f.querySelector("button[type=submit]"));
+  await sleep(400);
+  var joins = (W().Store.data.signups || []).filter(function (s) { return s.name === "自检机器人"; });
+  check("招新报名写入成功", joins.length === 1);
+  check("报名成功弹窗出现", /报名成功/.test((q("#modalBox") || {}).textContent || ""));
+  click(q("[data-close-modal]"));
+  await sleep(200);
+
+  click(q("[data-faq]"));
+  await sleep(200);
+  check("常见问题可展开", qa(".faq-item.open").length === 1);
+
+  await nav("#/events");
+  var firstSignup = q("[data-signup]");
+  click(firstSignup);
+  await sleep(300);
+  var sf = q("#signupForm");
+  check("活动报名弹窗打开", !!sf);
+  sf.querySelector("[name=name]").value = "自检机器人";
+  sf.querySelector("[name=contact]").value = "QQ 10001";
+  click(sf.querySelector("button[type=submit]"));
+  await sleep(400);
+  var evJoins = (W().Store.data.signups || []).filter(function (s) { return s.source === "活动报名" && s.name === "自检机器人"; });
+  check("活动报名写入成功", evJoins.length === 1);
+
+  log("=== 5. 上传作品（含本地视频）===", "head");
+  await nav("#/upload");
+  var upForm = q("#uploadForm");
+  check("上传表单存在", !!upForm);
+  upForm.querySelector("[name=title]").value = "自检投稿：一张测试图";
+  upForm.querySelector("[name=author]").value = "自检机器人";
+  upForm.querySelector("[name=category]").value = "插画";
+  upForm.querySelector("[name=desc]").value = "自动化测试写入";
+  var okNoMedia = upForm.querySelector("[name=title]").value;
+  click(upForm.querySelector("button[type=submit]"));
+  await sleep(300);
+  check("没有文件/链接时拒绝提交并提示", /请上传/.test((q("#upErr") || {}).textContent || ""));
+  upForm.querySelector("[name=link]").value = "https://www.bilibili.com/video/BV1GJ411x7h7";
+  click(upForm.querySelector("button[type=submit]"));
+  await sleep(400);
+  var mine = (W().Store.data.works || []).filter(function (w) { return w.author === "自检机器人"; });
+  check("投稿写入成功（进入待审核）", mine.length === 1 && mine[0].status === "pending");
+  check("B站链接被识别为可嵌入", W().toEmbed("https://www.bilibili.com/video/BV1GJ411x7h7").kind === "bili");
+  check("YouTube 链接识别", W().toEmbed("https://youtu.be/aqz-KE-bpKQ").kind === "yt");
+  check("mp4 直链识别", W().toEmbed("https://x.com/a.mp4").kind === "file");
+  check("乱填链接被判为无效", W().toEmbed("随便写的东西").kind === "link");
+
+  log("=== 6. 本地图片/视频上传（IndexedDB）===", "head");
+  var imgKey = await W().MediaDB.put(new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], "t.png", { type: "image/png" }));
+  check("图片写入 IndexedDB", !!imgKey, "key=" + imgKey);
+  var back = await W().MediaDB.get(imgKey);
+  check("图片可读回且类型正确", !!back && back.blob.size === 8 && back.type === "image/png");
+  var vidKey = await W().MediaDB.put(new File([new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112])], "t.mp4", { type: "video/mp4" }));
+  var vurl = await W().MediaDB.url(vidKey);
+  check("视频写入并生成 blob 地址", /^blob:/.test(vurl), vurl);
+  var slot = q(".img-slot");
+  if (slot) {
+    W().applySlot(slot, await W().MediaDB.url(imgKey), imgKey, "image/png");
+    await sleep(200);
+    check("占位框替换成图片后渲染出 img", !!slot.querySelector("img"));
+    check("媒体 key 写回了数据模型", !!slot.dataset.mediaKey);
+    W().clearSlot(slot);
+    await sleep(300);
+    check("移除后恢复成占位提示", /点击上传/.test(slot.textContent));
+  }
+
+  log("=== 7. 后台管理 ===", "head");
+  await nav("#/admin");
+  check("未登录时显示密码门", !!q("#adminPass"));
+  q("#adminPass").value = "wrong-password";
+  click(q("#adminLoginBtn"));
+  await sleep(250);
+  check("错误密码被拒绝", /不正确/.test((q("#gateErr") || {}).textContent || ""));
+  q("#adminPass").value = "admin123";
+  click(q("#adminLoginBtn"));
+  await sleep(500);
+  check("正确密码进入后台", !!q(".admin-shell"));
+  check("侧边栏有 10 个功能页", qa("[data-admin-tab]").length === 10, "实际 " + qa("[data-admin-tab]").length);
+
+  click(q("[data-admin-tab='works']"));
+  await sleep(400);
+  var pendingRows = qa("[data-work-approve]").length;
+  check("作品审核列表出现待审核按钮", pendingRows >= 2, "按钮数 " + pendingRows);
+  var target = qa("[data-work-approve]")[0];
+  click(target);
+  await sleep(400);
+  check("通过审核后状态变为已通过", (W().Store.data.works || []).filter(function (w) { return w.status === "approved"; }).length >= 10);
+
+  click(q("[data-admin-tab='events']"));
+  await sleep(350);
+  click(q("#newEvent"));
+  await sleep(300);
+  var ef = q("[data-admin-form='events']");
+  check("新建活动表单打开", !!ef);
+  ef.querySelector("[name=title]").value = "自检活动：测试用";
+  ef.querySelector("[name=start]").value = "2026-12-01T19:00";
+  ef.querySelector("[name=end]").value = "2026-12-01T21:00";
+  ef.querySelector("[name=place]").value = "测试地点";
+  click(ef.querySelector("button[type=submit]"));
+  await sleep(450);
+  var created = (W().Store.data.events || []).filter(function (e) { return e.title === "自检活动：测试用"; });
+  check("新建活动写入成功", created.length === 1);
+
+  click(q("[data-admin-tab='posts']"));
+  await sleep(300);
+  click(q("#newPost"));
+  await sleep(300);
+  var pf = q("[data-admin-form='posts']");
+  pf.querySelector("[name=title]").value = "自检公告：测试用";
+  pf.querySelector("[name=content]").value = "正文内容";
+  click(pf.querySelector("button[type=submit]"));
+  await sleep(450);
+  check("新建公告写入成功", (W().Store.data.posts || []).filter(function (p) { return p.title === "自检公告：测试用"; }).length === 1);
+
+  click(q("[data-admin-tab='posts']"));
+  await sleep(250);
+  var editBtn = q("[data-post-edit]");
+  click(editBtn);
+  await sleep(300);
+  var editForm = q("[data-admin-form='posts']");
+  var editId = editForm ? editForm.dataset.recordId : "";
+  check("编辑表单带上了记录 id（不会误新增）", !!editId, "id=" + editId);
+  var countBefore = (W().Store.data.posts || []).length;
+  if (editForm) {
+    editForm.querySelector("[name=title]").value = "自检公告：已改名";
+    click(editForm.querySelector("button[type=submit]"));
+    await sleep(450);
+  }
+  check("编辑保存后没有产生重复记录", (W().Store.data.posts || []).length === countBefore);
+  check("编辑内容已生效", (W().Store.data.posts || []).some(function (p) { return p.title === "自检公告：已改名"; }));
+
+  click(q("[data-admin-tab='site']"));
+  await sleep(350);
+  var siteForm = q("[data-admin-form='site']");
+  siteForm.querySelector("[name=qq]").value = "999888777";
+  click(siteForm.querySelector("button[type=submit]"));
+  await sleep(400);
+  check("站点设置保存后同步到页脚", (q("[data-site-qq]") || {}).textContent === "999888777");
+
+  click(q("[data-admin-tab='data']"));
+  await sleep(350);
+  var csvText = W().toCSV([{ a: 1, b: "x,y" }, { a: 2, b: 'he said "hi"' }]);
+  check("CSV 生成并正确转义引号与逗号", csvText.indexOf("\"x,y\"") > 0 && csvText.indexOf('""hi""') > 0);
+
+  log("=== 8. 外观与响应式 ===", "head");
+  click(q("#themeToggle"));
+  await sleep(300);
+  check("主题切换到浅色", W().document.documentElement.dataset.theme === "light");
+  check("浅色主题写入了 localStorage", W().localStorage.getItem("aneko_theme") === "light");
+  click(q("#themeToggle"));
+  await sleep(250);
+  check("主题切回深色", W().document.documentElement.dataset.theme === "dark");
+  frame.style.width = "390px";
+  await sleep(400);
+  check("移动端视图下导航折叠成汉堡按钮", getComputedStyle(q("#navToggle")).display !== "none");
+  check("移动端底部标签栏出现", getComputedStyle(q(".tabbar")).display !== "none");
+  click(q("#navToggle"));
+  await sleep(300);
+  check("汉堡菜单可以展开", q("#mainNav").classList.contains("open"));
+  click(q("#navToggle"));
+  await sleep(250);
+  frame.style.width = "100%";
+
+  log("=== 9. 数据持久化 ===", "head");
+  check("数据已写入 localStorage", !!W().localStorage.getItem("aneko_site_v1"));
+  var before = (W().Store.data.posts || []).length;
+  frame.src = "index.html#/posts";
+  await sleep(1200);
+  var after = (W().Store.data.posts || []).length;
+  check("刷新后自检写入的公告仍在（持久化生效）", after === before && after > 6, before + " → " + after);
+
+  log("=== 10. 控制台错误 ===", "head");
+  if (errors.length === 0) check("运行期间没有任何 JS 报错", true);
+  else { check("运行期间没有 JS 报错", false, errors.length + " 条"); errors.slice(0, 8).forEach(function (e) { log("   " + e, "err"); }); }
+
+  log("");
+  var summary = "自检结束：通过 " + pass + " 项，失败 " + fail + " 项" + (errors.length ? "，控制台报错 " + errors.length + " 条" : "，无控制台报错");
+  statEl.innerHTML = fail === 0 && errors.length === 0 ? '<span class="ok">' + summary + "</span>" : '<span class="err">' + summary + "</span>";
+  log(summary, fail === 0 ? "ok" : "err");
+  window.__result = { pass: pass, fail: fail, errors: errors };
+  document.title = (fail === 0 ? "✔ " : "✘ ") + "自检 " + pass + "/" + (pass + fail);
+}
+</script>
+</body>
+</html>
